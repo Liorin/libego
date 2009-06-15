@@ -26,7 +26,7 @@
 // uct parameters
 
 const float mature_update_count_threshold  = 100.0;
-const float explore_rate                   = 1.0;
+const float explore_rate                   = 0;
 const uint  uct_max_depth                  = 1000;
 const uint  uct_max_nodes                  = 1000000;
 const float resign_mean                    = 0.95;
@@ -34,12 +34,17 @@ const uint  uct_genmove_playout_cnt        = 100000;
 const float print_visit_threshold_base     = 500.0;
 const float print_visit_threshold_parent   = 0.02;
 
+const float rave_coefficient 			   = 200.0;
+const float distance_coefficient 		   = 0.01;
+const float rave_explore_rate 			   = 0;
+
+
 // ----------------------------------------------------------------------
 class Node {
 
 public:
   Stat stat;
-
+  Stat rave_stat;
   Player player;
   Vertex v;
   
@@ -81,15 +86,29 @@ public:
     return !have_child;
   }
 
-  Node* find_uct_child () {
+  Node* find_uct_child (Vertex* last_move) {
     Node* best_child = NULL;
     float best_urgency = -large_float;
     float explore_coeff = log (stat.update_count()) * explore_rate;
+	float rave_explore_coeff = log (rave_stat.update_count()) * rave_explore_rate;
+/* 
+ * rave doesn't need exploration part in ucb formula
+ * explore_rate & rave_explore_rate are 0, left in case further research of exploration term is needed
+ * */
+	int distance, n;
+	float beta;
     
     vertex_for_each_all(v) {
       Node* child = children[v];
       if (child == NULL) continue;
-      float child_urgency = child->stat.ucb (child->player, explore_coeff);
+
+	  distance = (v == Vertex::pass() ? 10000 : v.distanceTo(last_move));
+	  n = child->stat.update_count();
+	  beta = rave_coefficient / (rave_coefficient + n);	
+
+      float child_urgency = (1 - beta) * child->stat.ucb (child->player, explore_coeff) + 
+							beta * child->rave_stat.ucb(child->player, rave_explore_coeff) + 
+							( distance_coefficient/ distance) ;
       if (child_urgency > best_urgency) {
         best_urgency  = child_urgency;
         best_child    = child;
@@ -200,8 +219,8 @@ public:
     return history [history_top];
   }
   
-  void uct_descend () {
-    history [history_top + 1] = act_node ()->find_uct_child ();
+  void uct_descend (Vertex * last_move) {
+    history [history_top + 1] = act_node ()->find_uct_child (last_move);
     history_top++;
     assertc (tree_ac, act_node () != NULL);
   }
@@ -229,9 +248,25 @@ public:
 
   // TODO free history (for sync with base board)
   
-  void update_history (float sample) {
-    rep (hi, history_top+1) 
+  void update_history (float sample, Move * move_history, uint move_cnt) {
+    Node *child;
+    FastMap<Vertex, uint> played_nums;
+    vertex_for_each_all(v) {
+        played_nums[v] = 0;
+    };
+
+
+	rep (hi, history_top+1) {
        history [hi]->stat.update (sample);
+	   for (uint jj = hi+2; jj < move_cnt ; jj += 2) {
+       		Vertex vert = move_history[jj].get_vertex();
+       		if (played_nums[vert] == 0) played_nums[vert] = jj;
+       		if (played_nums[vert] != jj) continue;
+       		child = history[hi]->children[vert];
+      	 	if (child == NULL) continue;
+       		child->rave_stat.update(sample);
+       }
+	}
   }
 
   string to_string () { 
@@ -277,6 +312,7 @@ public:
     Vertex v;
     
     play_board.load (&base_board);
+ 	uint playout_start_move = play_board.move_no; //needed to properly update uct tree with rave values 
     tree.history_reset ();
     
     do {
@@ -297,11 +333,20 @@ public:
         Playout<SimplePolicy> (&policy, &play_board).run ();
 
         int score = play_board.winner().get_idx (); // black -> 0, white -> 1
-        tree.update_history (1 - score - score); // black -> 1, white -> -1
+
+
+        tree.update_history (1 - score - score, play_board.move_history + playout_start_move, play_board.move_no - playout_start_move); 
+// black won -> sample(update_history first arg) =  1, white won  -> sample = -1
         return;
       }
-      
-      tree.uct_descend ();
+
+ 	  if (play_board.move_no > 1) {
+    		Vertex last_move = play_board.move_history[(play_board.move_no) -1].get_vertex();
+    		tree.uct_descend ( &last_move);
+      } else {
+    		tree.uct_descend( NULL);
+      };
+
       v = tree.act_node ()->v;
       
       if (play_board.is_pseudo_legal (act_player, v) == false) {
@@ -319,7 +364,7 @@ public:
       act_player = act_player.other();
 
       if (play_board.both_player_pass()) {
-        tree.update_history (play_board.tt_winner_score());
+        tree.update_history (play_board.tt_winner_score() , play_board.move_history + playout_start_move, play_board.move_no - playout_start_move);
         return;
       }
 

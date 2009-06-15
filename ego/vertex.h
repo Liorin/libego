@@ -62,6 +62,8 @@ public:
   Vertex SW () const;
   Vertex SE () const;
 
+  int distanceTo(Vertex* v);
+
   string to_string () const;
 
   bool operator== (Vertex other) const;

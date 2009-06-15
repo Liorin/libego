@@ -138,6 +138,20 @@ Vertex Vertex::NE () const { return N ().E (); } // only Go
 Vertex Vertex::SW () const { return S ().W (); } // only Go
 Vertex Vertex::SE () const { return S ().E (); }
 
+int  Vertex::distanceTo(Vertex* v) {
+	/*returns distance to vertex v, 
+ 	* metric is city metric + max(x,y)*/
+    if (v == NULL)
+        return 100000;
+    if ( (*v == Vertex::pass()) || (*v == Vertex::resign()))
+        return 10000;
+    int x,y;
+    x = abs (v->get_row().idx - this->get_row().idx);
+    y = abs (v->get_col().idx - this->get_col().idx);
+    return x + y + (x > y ? x : y);
+}
+
+
 string Vertex::to_string () const {
   Coord r;
   Coord c;
